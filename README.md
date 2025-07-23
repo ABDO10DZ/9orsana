@@ -62,17 +62,17 @@ ollama run deepseek-coder
 
 **Scan WordPress plugin**:
 ```bash
-python scanner.py --cms WordPress --plugin contact-form-7 -o report.json --self-update
+python 9orsana.py --cms WordPress --plugin contact-form-7 -o report.json --self-update
 ```
 
 **Scan local GraphQL API**:
 ```bash
-python scanner.py --path ./graphql/schema.graphql -o graphql_report.json
+python 9orsana.py --path ./graphql/schema.graphql -o graphql_report.json
 ```
 
 **Scan Python web app**:
 ```bash
-python scanner.py --path ./myapp --self-update
+python 9orsana.py --path ./myapp --self-update
 ```
 
 ### Self-Improvement Process:
