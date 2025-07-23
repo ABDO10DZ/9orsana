@@ -1,4 +1,6 @@
 # 9orsana
+<center><img src="9orsana.jpg"></center>
+
 ### Key Innovations:
 
 1. **9orsana Scanning Architecture**:
