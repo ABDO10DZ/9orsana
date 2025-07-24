@@ -1,4 +1,5 @@
 # Maintainer: Abdo10dz <abdo10_dz@pm.me>
+
 pkgname=9orsana
 pkgver=1.0.0
 pkgrel=1
@@ -18,5 +19,8 @@ source=("$pkgname::git+$url.git")
 md5sums=('SKIP')
 
 package() {
-  install -Dm755 "$srcdir/$pkgname/9orsana.py" "$pkgdir/usr/bin/9orsana"
+  cd "$srcdir/$pkgname"
+
+  # Make sure script is executable
+  install -Dm755 "9orsana.py" "$pkgdir/usr/bin/9orsana"
 }
