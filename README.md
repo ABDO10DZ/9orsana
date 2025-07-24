@@ -1,5 +1,5 @@
 # 9orsana
-<center><img src="9orsana.jpg"></center>
+<center><img src="9orsana.png"></center>
 
 ### Key Innovations:
 
