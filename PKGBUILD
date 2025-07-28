@@ -14,13 +14,24 @@ optdepends=(
   'ollama: For DeepSeek AI model execution'
   'curl: For downloading external CLI tools'
 )
-makedepends=('git')
+makedepends=('git' 'composer')  # Added composer as build dependency
 source=("$pkgname::git+$url.git")
 md5sums=('SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+
+  # Install PHP dependencies using composer
+  COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
+}
 
 package() {
   cd "$srcdir/$pkgname"
 
-  # Make sure script is executable
+  # Install Python script
   install -Dm755 "9orsana.py" "$pkgdir/usr/bin/9orsana"
+
+  # Install PHP files with vendor/ to /usr/share/9orsana
+  install -d "$pkgdir/usr/share/9orsana"
+  cp -r *.php vendor/ composer.* "$pkgdir/usr/share/9orsana"
 }
