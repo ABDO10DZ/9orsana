@@ -84,6 +84,7 @@ python 9orsana.py --path ./graphql/schema.graphql -o graphql_report.json
 ```bash
 python 9orsana.py --path ./myapp --self-update
 ```
+<img src="demo_scan.jpg" alt="Preview" width="400">
 
 ### Self-Improvement Process:
 
@@ -159,6 +160,7 @@ python 9orsana.py --path ./myapp --self-update
 1. **Vulnerability Heatmap**:
    - `vulnerability_heatmap.png` shows risk distribution
    - Redder bars indicate higher-risk files
+<img src="demo_heatmap.png" alt="Preview" width="400">
 
 2. **Behavior Profile**:
    - Vulnerability type distribution
