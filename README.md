@@ -40,6 +40,16 @@
 # PHP scanning
 sudo apt-get install php php-ast
 
+# composer setup
+curl -sS https://getcomposer.org/installer -o composer-setup.php
+HASH="$(wget -q -O - https://composer.github.io/installer.sig)"
+php -r "if (hash_file('SHA384', 'composer-setup.php') === '$HASH') { echo 'Installer verified'; } else { echo 'Installer corrupt'; unlink('composer-setup.php'); } echo PHP_EOL;"
+sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+php -r "unlink('composer-setup.php');"
+
+# installing nikic/php-parser via composer 
+composer require nikic/php-parser
+
 # Python dependencies
 pip install requests numpy scikit-learn matplotlib networkx
 
