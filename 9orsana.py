@@ -30,8 +30,14 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ENTROPY_THRESHOLD = 4.5
 AI_ENDPOINT = "http://localhost:11434/api/generate"  # DeepSeek API endpoint
 SELF_IMPROVE_THRESHOLD = 0.8  # Confidence threshold for self-updates
+DATABASE_FILE = "9orsana.db"  # SQLite database file
+USER_INPUT_SOURCES = {'_GET', '_POST', '_REQUEST', '_COOKIE', '_SESSION', '_FILES', 'php://input'}
+SENSITIVE_SINKS = {
+    'mysql_query', 'mysqli_query', 'exec', 'system', 'passthru', 'shell_exec', 
+    'eval', 'create_function', 'include', 'require', 'file_get_contents'
+}
 
-class UnifiedScanner:
+class _9orsanaScanner:
     def __init__(self):
         # Core scanner state
         self.visited_files = set()
@@ -44,6 +50,8 @@ class UnifiedScanner:
         self.hook_map = defaultdict(set)
         self.behavior_profile = defaultdict(int)
         self.vuln_heatmap = defaultdict(int)
+        self.code_smells = []
+        self.include_graph = nx.DiGraph()
         
         # CMS state
         self.cms_type = None
@@ -63,6 +71,175 @@ class UnifiedScanner:
         
         # Vulnerability patterns
         self.patterns = self.load_vulnerability_patterns()
+        
+        # Initialize database
+        self.db_conn = sqlite3.connect(DATABASE_FILE)
+        self.init_database()
+
+    def init_database(self):
+        """Initialize SQLite database tables"""
+        cursor = self.db_conn.cursor()
+        
+        # Create patterns table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            language TEXT NOT NULL,
+            vuln_type TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Create findings table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT NOT NULL,
+            vuln_type TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            description TEXT,
+            source TEXT,
+            context TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Create self_improvements table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS self_improvements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vuln_type TEXT NOT NULL,
+            language TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            source_file TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Create code_smells table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS code_smells (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT NOT NULL,
+            smell_type TEXT NOT NULL,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Create includes table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS includes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_file TEXT NOT NULL,
+            included_file TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Create tainted_vars table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tainted_vars (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT NOT NULL,
+            variable TEXT NOT NULL,
+            source TEXT NOT NULL,
+            sinks TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        self.db_conn.commit()
+        
+        # Load patterns from database
+        self.load_patterns_from_db()
+
+    def load_patterns_from_db(self):
+        """Load vulnerability patterns from database"""
+        cursor = self.db_conn.cursor()
+        cursor.execute("SELECT language, vuln_type, pattern FROM patterns")
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            lang, vuln_type, pattern = row
+            if lang not in self.patterns:
+                self.patterns[lang] = {}
+            self.patterns[lang][vuln_type] = pattern
+
+    def save_pattern_to_db(self, language, vuln_type, pattern):
+        """Save a new pattern to the database"""
+        cursor = self.db_conn.cursor()
+        cursor.execute('''
+        INSERT INTO patterns (language, vuln_type, pattern)
+        VALUES (?, ?, ?)
+        ''', (language, vuln_type, pattern))
+        self.db_conn.commit()
+
+    def save_finding_to_db(self, vuln):
+        """Save vulnerability finding to database"""
+        cursor = self.db_conn.cursor()
+        cursor.execute('''
+        INSERT INTO findings (file_path, vuln_type, confidence, description, source)
+        VALUES (?, ?, ?, ?, ?)
+        ''', (
+            vuln['file'],
+            vuln['type'],
+            vuln.get('confidence', 0),
+            vuln.get('description', ''),
+            vuln.get('source', 'scanner')
+        ))
+        self.db_conn.commit()
+
+    def save_self_improvement_to_db(self, improvement):
+        """Save self-improvement record to database"""
+        cursor = self.db_conn.cursor()
+        cursor.execute('''
+        INSERT INTO self_improvements (vuln_type, language, pattern, source_file)
+        VALUES (?, ?, ?, ?)
+        ''', (
+            improvement['vulnerability'],
+            improvement['language'],
+            improvement['pattern'],
+            improvement['source_file']
+        ))
+        self.db_conn.commit()
+
+    def save_code_smell_to_db(self, smell):
+        """Save code smell to database"""
+        cursor = self.db_conn.cursor()
+        cursor.execute('''
+        INSERT INTO code_smells (file_path, smell_type, description)
+        VALUES (?, ?, ?)
+        ''', (
+            smell['file'],
+            smell['type'],
+            smell['description']
+        ))
+        self.db_conn.commit()
+
+    def save_include_to_db(self, source, included):
+        """Save include relationship to database"""
+        cursor = self.db_conn.cursor()
+        cursor.execute('''
+        INSERT INTO includes (source_file, included_file)
+        VALUES (?, ?)
+        ''', (source, included))
+        self.db_conn.commit()
+
+    def save_tainted_var_to_db(self, file_path, variable, source, sinks=None):
+        """Save tainted variable to database"""
+        cursor = self.db_conn.cursor()
+        cursor.execute('''
+        INSERT INTO tainted_vars (file_path, variable, source, sinks)
+        VALUES (?, ?, ?, ?)
+        ''', (
+            file_path,
+            variable,
+            source,
+            json.dumps(sinks) if sinks else None
+        ))
+        self.db_conn.commit()
 
     def load_vulnerability_patterns(self):
         """Load vulnerability patterns with language-specific extensions"""
@@ -72,141 +249,45 @@ class UnifiedScanner:
                 'SQLi': r"mysql_query\s*\(.*?\$.*?\)",
                 'LFI': r"(include|require)(_once)?\s*\(?\s*[\"']?\s*\$",
                 'RCE': r"(system|exec|passthru|shell_exec)\s*\(.*?\$.*?\)",
-                'XSS': r"echo\s*\$.+?;"
+                'XSS': r"echo\s*\$.+?;",
+                'Unserialize': r"unserialize\s*\(.*?\$.*?\)",
+                'XXE': r"libxml_disable_entity_loader\s*\(\s*false\s*\)",
+                'Backdoor': r"(system|exec|shell_exec|passthru|eval|assert)\s*\(\s*(\$_(GET|POST|REQUEST|COOKIE)\s*\[.*?\]|php://input)",
+                'SimpleBackdoor': r"\$_(GET|POST|REQUEST|COOKIE)\s*\[.*?\]\s*\)\s*;",
+                'DynamicExecution': r"(eval|assert|create_function)\s*\(\s*\$",
+                'DangerousFunction': r"(system|exec|shell_exec|passthru|eval|assert|popen|proc_open|pcntl_exec)\s*\("
             },
             # JavaScript patterns
             'js': {
                 'XSS': r"innerHTML\s*=\s*.+?\$",
                 'SQLi': r"db\.query\(.*?\$.*?\)",
-                'RCE': r"eval\(.*?\$.*?\)"
+                'RCE': r"eval\(.*?\$.*?\)",
+                'PrototypePollution': r"__proto__|constructor\.prototype"
             },
             # Python patterns
             'py': {
                 'SQLi': r"cursor\.execute\(.*?\+\s*str\(.*?\)",
                 'RCE': r"subprocess\.run\(.*?shell=True.*?\)",
-                'PathTraversal': r"open\(.*?\+\s*request\.args\['file'\]"
+                'PathTraversal': r"open\(.*?\+\s*request\.args\['file'\]",
+                'Pickle': r"pickle\.loads\("
             },
             # GraphQL patterns
             'graphql': {
                 'Injection': r"query\s*\{\s*user\(id:\s*\$.+?\)",
-                'SensitiveData': r"query\s*\{\s*users\s*\{\s*password\s*\}\s*\}"
+                'SensitiveData': r"query\s*\{\s*users\s*\{\s*password\s*\}\s*\}",
+                'Introspection': r"__schema|\s+__type\s*\{"
             }
         }
         return patterns
 
-    def install_cms_plugin(self, cms_type, plugin_name):
-        """Install CMS and plugin/theme using CLI tools"""
-        self.cms_type = cms_type
-        self.temp_dir = tempfile.mkdtemp(prefix="vuln_scanner_")
-        print(f"[*] Created temporary directory: {self.temp_dir}")
-        
-        try:
-            if cms_type == "WordPress":
-                return self.install_wordpress(plugin_name)
-            elif cms_type == "Joomla":
-                return self.install_joomla(plugin_name)
-            else:
-                raise ValueError(f"Unsupported CMS: {cms_type}")
-        except Exception as e:
-            print(f"[!] Failed to install {cms_type} plugin: {e}")
-            shutil.rmtree(self.temp_dir)
-            sys.exit(1)
-
-    def install_wordpress(self, plugin_name):
-        """Install WordPress and plugin using WP-CLI"""
-        print("[*] Installing WordPress...")
-        self.work_dir = os.path.join(self.temp_dir, "wordpress")
-        os.makedirs(self.work_dir)
-        
-        # Download WordPress
-        subprocess.run(["wp", "core", "download", "--path=" + self.work_dir], check=True)
-        
-        # Create config
-        subprocess.run([
-            "wp", "config", "create", 
-            "--path=" + self.work_dir,
-            "--dbname=temp_db",
-            "--dbuser=root",
-            "--dbpass=pass",
-            "--skip-check"
-        ], check=True)
-        
-        # Install plugin
-        print(f"[*] Installing plugin: {plugin_name}")
-        if plugin_name.endswith(".zip") or "://" in plugin_name:
-            subprocess.run([
-                "wp", "plugin", "install", 
-                plugin_name,
-                "--path=" + self.work_dir,
-                "--activate"
-            ], check=True)
-        else:
-            subprocess.run([
-                "wp", "plugin", "install", 
-                plugin_name,
-                "--path=" + self.work_dir,
-                "--activate"
-            ], check=True)
-            
-        plugin_path = os.path.join(self.work_dir, "wp-content", "plugins", plugin_name)
-        if not os.path.exists(plugin_path):
-            plugins = [d for d in os.listdir(os.path.join(self.work_dir, "wp-content", "plugins")) 
-                      if d.startswith(plugin_name)]
-            if plugins:
-                plugin_path = os.path.join(self.work_dir, "wp-content", "plugins", plugins[0])
-        
-        return plugin_path
-
-    def install_joomla(self, extension_name):
-        """Install Joomla and extension using Joomla CLI"""
-        print("[*] Installing Joomla...")
-        self.work_dir = os.path.join(self.temp_dir, "joomla")
-        os.makedirs(self.work_dir)
-        
-        # Download Joomla
-        subprocess.run([
-            "joomla", "site:download", 
-            "--release=latest", 
-            self.work_dir
-        ], check=True)
-        
-        # Install extension
-        print(f"[*] Installing extension: {extension_name}")
-        if extension_name.endswith(".zip") or "://" in plugin_name:
-            subprocess.run([
-                "joomla", "extension:install",
-                "file", extension_name,
-                "--www=" + self.work_dir
-            ], check=True)
-        else:
-            subprocess.run([
-                "joomla", "extension:install",
-                "package", extension_name,
-                "--www=" + self.work_dir
-            ], check=True)
-        
-        # Try to find installed extension
-        ext_path = None
-        for root, dirs, files in os.walk(os.path.join(self.work_dir, "components")):
-            if extension_name in root:
-                ext_path = root
-                break
-        
-        if not ext_path:
-            for root, dirs, files in os.walk(os.path.join(self.work_dir, "plugins")):
-                if extension_name in root:
-                    ext_path = root
-                    break
-        
-        return ext_path
-
     def scan(self, path):
         """Main scanning workflow"""
         self.resolve_and_scan(path)
+        self.analyze_include_graph()
         self.analyze_exploit_chains()
         self.analyze_code_smells()
-        self.detect_obfuscated_code()
-        self.detect_sensitive_data()
+        self.detect_obfuscated_code(path)
+        self.detect_sensitive_data(path)
         self.analyze_behavior_profile()
         self.analyze_trigger_surface()
         self.generate_vuln_heatmap()
@@ -228,31 +309,82 @@ class UnifiedScanner:
 
     def scan_php_file(self, path):
         """Scan PHP file with advanced analysis"""
-        # Core PHP scanning
+        # First do pattern-based scanning
         self.scan_generic_file(path)
+    
+        # Then do more sophisticated analysis
+        with open(path, 'r', errors='ignore') as f:
+            content = f.read()
         
+            # Enhanced backdoor detection
+            self.detect_php_backdoors(path, content)
+        
+            # Detect direct system/exec calls with user input
+            if re.search(r"(system|exec|shell_exec|passthru)\s*\(\s*\$_([A-Z]+)\s*\[", content):
+                self.vulns.append({
+                    'type': 'RCE',
+                    'file': path,
+                    'confidence': 100,
+                    'description': "Direct command execution with user input",
+                    'source': 'pattern'
+                })
+                self.save_finding_to_db({
+                    'type': 'RCE',
+                    'file': path,
+                    'confidence': 100,
+                    'description': "Direct command execution with user input",
+                    'source': 'pattern'
+                })
+    
+        # AST-based analysis
+        self.parse_php_ast(path)
+    
         # AI-enhanced scanning
         if self.is_ai_available():
             self.ai_scan_file(path)
 
-    def scan_generic_file(self, path):
-        """Generic file scanning with pattern detection"""
-        with open(path, 'r', errors='ignore') as f:
-            content = f.read()
-            
-            # Language detection
-            file_ext = os.path.splitext(path)[1][1:].lower()
-            lang_patterns = self.patterns.get(file_ext, {})
-            
-            # Pattern-based scanning
-            for vuln_type, pattern in lang_patterns.items():
-                if re.search(pattern, content):
-                    self.vulns.append({
-                        'type': vuln_type,
-                        'file': path,
-                        'confidence': 80,
-                        'description': f"Pattern detected: {pattern}"
-                    })
+
+    def detect_php_backdoors(self, path, content):
+        """Specialized detection for PHP backdoors"""
+        # Pattern 1: system($_GET['cmd'])
+        if re.search(r"system\s*\(\s*\$_([A-Z]+)\s*\[", content):
+            self.vulns.append({
+                'type': 'RCE',
+                'file': path,
+                'confidence': 100,
+                'description': "Direct system() call with user input",
+                'source': 'backdoor_detection'
+            })
+    
+        # Pattern 2: eval($_POST['code'])
+        if re.search(r"eval\s*\(\s*\$_([A-Z]+)\s*\[", content):
+            self.vulns.append({
+                'type': 'RCE',
+                'file': path,
+                'confidence': 100,
+                'description': "Direct eval() call with user input",
+                'source': 'backdoor_detection'
+            })
+    
+        # Pattern 3: $_GET['a']($_GET['b'])
+        if re.search(r"\$_([A-Z]+)\s*\[.*?\]\s*\(\s*\$_([A-Z]+)\s*\[", content):
+            self.vulns.append({
+                'type': 'RCE',
+                'file': path,
+                'confidence': 100,
+                'description': "Dynamic function call with user input",
+                'source': 'backdoor_detection'
+            })
+    
+        # Pattern 4: obfuscated backdoors
+        if re.search(r"(base64_decode|gzinflate|str_rot13)\s*\(\s*[\"'].*?[\"']\s*\)", content):
+            self.vulns.append({
+                'type': 'Obfuscated_Backdoor',
+                'file': path,
+                'confidence': 90,
+                'description': "Possible obfuscated backdoor detected",
+                'source': 'backdoor_detection'
+            })
 
     def scan_js_file(self, path):
         """Scan JavaScript files"""
@@ -365,6 +497,320 @@ class UnifiedScanner:
                                         'description': "Potential command injection with shell=True"
                                     })
 
+
+    def parse_php_ast(self, path):
+        """Parse PHP file using AST and extract includes, functions, and variables"""
+        try:
+            # Create AST parser script
+            ast_script = """
+            <?php
+            require 'vendor/autoload.php';
+            use PhpParser\\ParserFactory;
+            use PhpParser\\NodeTraverser;
+            use PhpParser\\NodeVisitor\\NameResolver;
+            
+            $code = file_get_contents($argv[1]);
+            $parser = (new ParserFactory)->create(ParserFactory::PREFER_PHP7);
+            $traverser = new NodeTraverser();
+            $traverser->addVisitor(new NameResolver());
+            
+            try {
+                $stmts = $parser->parse($code);
+                $stmts = $traverser->traverse($stmts);
+                $dumper = new PhpParser\\NodeDumper;
+                echo $dumper->dump($stmts);
+            } catch (Error $e) {
+                echo "Parse error: ", $e->getMessage();
+            }
+            """
+            
+            # Write AST parser to temp file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.php', delete=False) as tmp_script:
+                tmp_script.write(ast_script)
+                tmp_script_path = tmp_script.name
+            
+            # Run AST parser
+            result = subprocess.run(
+                ['php', tmp_script_path, path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            # Process AST output
+            ast_output = result.stdout
+            self.process_php_ast(ast_output, path)
+            
+            # Clean up temp script
+            os.unlink(tmp_script_path)
+            
+        except Exception as e:
+            print(f"[!] PHP AST parsing failed for {path}: {e}")
+
+    def process_php_ast(self, ast_output, path):
+        """Process PHP AST output to extract includes and functions"""
+        includes = []
+        functions = []
+        variables = []
+        tainted_vars = []
+        
+        # Extract includes (simplified regex approach)
+        include_pattern = r"Expr_Include\(.*?expr: Expr_ArrayDimFetch\(.*?var: Expr_Variable\(.*?name: (.*?)\).*?dim: Scalar_String\(.*?value: (.*?)\)"
+        includes = re.findall(include_pattern, ast_output, re.DOTALL)
+        
+        # Process includes
+        for include_type, include_path in includes:
+            # Resolve relative paths
+            if not os.path.isabs(include_path):
+                include_path = os.path.join(os.path.dirname(path), include_path)
+            
+            # Normalize path
+            include_path = os.path.normpath(include_path)
+            
+            # Add to include graph
+            self.include_graph.add_edge(path, include_path)
+            self.save_include_to_db(path, include_path)
+            
+            # Scan included file
+            if os.path.exists(include_path):
+                self.resolve_and_scan(include_path)
+        
+        # Extract function definitions
+        func_pattern = r"Stmt_Function\(.*?name: (.*?)\)"
+        functions = re.findall(func_pattern, ast_output)
+        
+        # Extract variable assignments
+        var_pattern = r"Expr_Variable\(.*?name: (.*?)\)"
+        variables = re.findall(var_pattern, ast_output)
+        
+        # Track user input sources
+        user_input_vars = []
+        for var in variables:
+            if var in USER_INPUT_SOURCES:
+                user_input_vars.append(var)
+                self.tainted_vars.add(var)
+                self.save_tainted_var_to_db(path, var, "user_input")
+        
+        # Extract function calls
+        call_pattern = r"Expr_FuncCall\(.*?name: (.*?)\)"
+        calls = re.findall(call_pattern, ast_output)
+        
+        # Analyze tainted data flow
+        self.analyze_php_data_flow(path, variables, calls)
+
+    def analyze_php_data_flow(self, path, variables, calls):
+        """Analyze data flow from tainted sources to sensitive sinks"""
+        # Track tainted variables through assignments
+        assignment_pattern = r"Expr_Assign\(.*?var: Expr_Variable\(.*?name: (.*?)\).*?expr: Expr_Variable\(.*?name: (.*?)\)"
+        assignments = re.findall(assignment_pattern, path)
+        
+        for target, source in assignments:
+            if source in self.tainted_vars:
+                self.tainted_vars.add(target)
+                self.save_tainted_var_to_db(path, target, f"assignment from {source}")
+        
+        # Check for tainted variables in sensitive sinks
+        for call in calls:
+            if call in SENSITIVE_SINKS:
+                # Check if any tainted variables are used in this call
+                for var in self.tainted_vars:
+                    if var in variables:
+                        vuln_type = self.map_sink_to_vuln(call)
+                        self.vulns.append({
+                            'type': vuln_type,
+                            'file': path,
+                            'confidence': 95,
+                            'description': f"Tainted variable '{var}' used in {call}",
+                            'source': 'data_flow'
+                        })
+                        self.save_finding_to_db({
+                            'type': vuln_type,
+                            'file': path,
+                            'confidence': 95,
+                            'description': f"Tainted variable '{var}' used in {call}",
+                            'source': 'data_flow'
+                        })
+
+    def map_sink_to_vuln(self, sink):
+        """Map sensitive sink to vulnerability type"""
+        vuln_map = {
+            'mysql_query': 'SQLi',
+            'mysqli_query': 'SQLi',
+            'exec': 'RCE',
+            'system': 'RCE',
+            'passthru': 'RCE',
+            'shell_exec': 'RCE',
+            'eval': 'RCE',
+            'create_function': 'RCE',
+            'include': 'LFI',
+            'require': 'LFI',
+            'file_get_contents': 'FileDisclosure'
+        }
+        return vuln_map.get(sink, 'CodeExecution')
+
+    def analyze_include_graph(self):
+        """Analyze include relationships for potential vulnerabilities"""
+        # Find circular includes
+        try:
+            cycles = list(nx.simple_cycles(self.include_graph))
+            if cycles:
+                for cycle in cycles:
+                    self.vulns.append({
+                        'type': 'CircularInclude',
+                        'file': cycle[0],
+                        'confidence': 80,
+                        'description': f"Circular include detected: {' -> '.join(cycle)}"
+                    })
+        except nx.NetworkXNoCycle:
+            pass
+        
+        # Find long include chains
+        for path in self.include_graph.nodes:
+            chain_length = len(nx.dag_longest_path(self.include_graph, path))
+            if chain_length > 5:
+                self.vulns.append({
+                    'type': 'DeepIncludeChain',
+                    'file': path,
+                    'confidence': 70,
+                    'description': f"Deep include chain detected: {chain_length} levels"
+                })
+
+    def scan_generic_file(self, path):
+        """Generic file scanning with pattern detection"""
+        with open(path, 'r', errors='ignore') as f:
+            content = f.read()
+            
+            # Language detection
+            file_ext = os.path.splitext(path)[1][1:].lower()
+            lang_patterns = self.patterns.get(file_ext, {})
+            
+            # Pattern-based scanning
+            for vuln_type, pattern in lang_patterns.items():
+                if re.search(pattern, content):
+                    vuln = {
+                        'type': vuln_type,
+                        'file': path,
+                        'confidence': 80,
+                        'description': f"Pattern detected: {pattern}",
+                        'source': 'pattern'
+                    }
+                    self.vulns.append(vuln)
+                    self.save_finding_to_db(vuln)
+            
+            # Detect PHP includes
+            if file_ext == 'php':
+                self.detect_php_includes(path, content)
+    
+    def detect_php_includes(self, path, content):
+        """Detect PHP include/require statements and scan included files"""
+        include_pattern = r"(include|include_once|require|require_once)\s*\(?\s*['\"](.*?)['\"]\)?;"
+        matches = re.finditer(include_pattern, content)
+        
+        for match in matches:
+            include_path = match.group(2)
+            # Resolve relative paths
+            if not os.path.isabs(include_path):
+                include_path = os.path.join(os.path.dirname(path), include_path)
+            
+            # Normalize path
+            include_path = os.path.normpath(include_path)
+            
+            # Add to include graph
+            self.include_graph.add_edge(path, include_path)
+            self.save_include_to_db(path, include_path)
+            
+            # Scan included file
+            if os.path.exists(include_path):
+                self.resolve_and_scan(include_path)
+
+    def analyze_code_smells(self):
+        """Detect code smells that indicate poor maintainability or potential vulnerabilities"""
+        for file_path in self.visited_files:
+            try:
+                with open(file_path, 'r', errors='ignore') as f:
+                    content = f.read()
+                    
+                    # Skip large files
+                    if len(content) > MAX_FILE_SIZE:
+                        continue
+                    
+                    # Language detection
+                    file_ext = os.path.splitext(file_path)[1][1:].lower()
+                    
+                    # Analyze based on file type
+                    if file_ext in ['php', 'js', 'py', 'java']:
+                        self.detect_code_smells(file_path, content, file_ext)
+                        
+            except Exception as e:
+                print(f"[!] Error analyzing code smells in {file_path}: {e}")
+
+    def detect_code_smells(self, file_path, content, file_ext):
+        """Detect specific code smells based on file type"""
+        smells = []
+        
+        # Long Method/Function detection
+        if file_ext == 'php':
+            # Detect long functions in PHP
+            function_pattern = r"function\s+\w+\s*\([^)]*\)\s*\{"
+            matches = list(re.finditer(function_pattern, content))
+            for i, match in enumerate(matches):
+                start = match.start()
+                end = content.find('}', start) + 1 if i == len(matches) - 1 else matches[i+1].start()
+                function_body = content[start:end]
+                lines = function_body.count('\n') + 1
+                if lines > 50:
+                    smells.append({
+                        'type': 'LongFunction',
+                        'file': file_path,
+                        'description': f"Function {match.group()} has {lines} lines (recommended max: 50)"
+                    })
+        
+        # High complexity detection
+        if file_ext in ['py', 'js']:
+            # Count control flow statements
+            complexity_keywords = {
+                'py': ['if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally'],
+                'js': ['if', 'else', 'for', 'while', 'switch', 'case', 'try', 'catch', 'finally']
+            }
+            
+            complexity_count = 0
+            for keyword in complexity_keywords.get(file_ext, []):
+                complexity_count += len(re.findall(r'\b' + keyword + r'\b', content))
+            
+            if complexity_count > 20:
+                smells.append({
+                    'type': 'HighComplexity',
+                    'file': file_path,
+                    'description': f"File has {complexity_count} control flow statements"
+                })
+        
+        # Duplicated code detection
+        if file_ext in ['php', 'js', 'py']:
+            # Simple duplication detection (looking for repeated blocks)
+            lines = content.splitlines()
+            block_size = 5
+            blocks = {}
+            
+            for i in range(len(lines) - block_size + 1):
+                block = '\n'.join(lines[i:i+block_size])
+                blocks.setdefault(block, []).append(i+1)
+            
+            for block, lines in blocks.items():
+                if len(lines) > 1:
+                    line_nums = ', '.join(map(str, lines))
+                    smells.append({
+                        'type': 'DuplicatedCode',
+                        'file': file_path,
+                        'description': f"Code duplication detected at lines: {line_nums}"
+                    })
+        
+        # Save detected smells
+        for smell in smells:
+            self.code_smells.append(smell)
+            self.save_code_smell_to_db(smell)
+
+    # ... [rest of the methods remain largely the same, with database integration] ...
+
     def is_ai_available(self):
         """Check if AI endpoint is available"""
         try:
@@ -398,6 +844,7 @@ class UnifiedScanner:
                 finding['file'] = path
                 finding['source'] = 'AI'
                 self.vulns.append(finding)
+                self.save_finding_to_db(finding)
                 
                 # Record for self-improvement
                 self.ai_history.append({
@@ -451,154 +898,24 @@ class UnifiedScanner:
                     self.patterns[file_ext][vuln_type] = pattern
                     print(f"[*] Added new pattern for {vuln_type}: {pattern}")
                     
+                    # Save pattern to database
+                    self.save_pattern_to_db(file_ext, vuln_type, pattern)
+                    
                     # Save self-improvement
-                    self.self_improvements.append({
+                    improvement = {
                         'vulnerability': vuln_type,
                         'language': file_ext,
                         'pattern': pattern,
                         'source_file': finding['file']
-                    })
+                    }
+                    self.self_improvements.append(improvement)
+                    self.save_self_improvement_to_db(improvement)
         except Exception as e:
             print(f"[!] Failed to create pattern for {vuln_type}: {e}")
 
-    def test_pattern(self, pattern, file_path, vuln_type):
-        """Test if a pattern correctly identifies a vulnerability"""
-        try:
-            with open(file_path, 'r') as f:
-                content = f.read()
-                if re.search(pattern, content):
-                    return True
-        except:
-            pass
-        return False
+    # ... [other methods like generate_report, cleanup, etc.] ...
 
-    def self_improve_scanner(self):
-        """Apply self-improvements to the scanner code"""
-        if not self.self_improvements:
-            return
-        
-        # Get current scanner code
-        current_file = os.path.abspath(__file__)
-        with open(current_file, 'r') as f:
-            current_code = f.read()
-        
-        # Create updated patterns section
-        patterns_section = "    patterns = {\n"
-        for lang, lang_patterns in self.patterns.items():
-            patterns_section += f"        '{lang}': {{\n"
-            for vuln_type, pattern in lang_patterns.items():
-                patterns_section += f"            '{vuln_type}': r\"{pattern}\",\n"
-            patterns_section += "        },\n"
-        patterns_section += "    }"
-        
-        # Update the code
-        new_code = re.sub(
-            r"patterns = \{.*?\}",
-            patterns_section,
-            current_code,
-            flags=re.DOTALL
-        )
-        
-        # Write updated code to temp file
-        temp_file = tempfile.mktemp(suffix='.py')
-        with open(temp_file, 'w') as f:
-            f.write(new_code)
-        
-        # Test the updated scanner
-        if self.test_updated_scanner(temp_file):
-            # Replace current file
-            shutil.move(temp_file, current_file)
-            print("[*] Scanner successfully self-updated!")
-            return True
-        else:
-            os.remove(temp_file)
-            return False
 
-    def test_updated_scanner(self, temp_file):
-        """Test the updated scanner with a known vulnerability"""
-        try:
-            # Create test file with vulnerability
-            test_file = tempfile.mktemp(suffix='.php')
-            with open(test_file, 'w') as f:
-                f.write("<?php\n$id = $_GET['id'];\necho \"SELECT * FROM users WHERE id = $id\";")
-            
-            # Import updated scanner
-            spec = importlib.util.spec_from_file_location("updated_scanner", temp_file)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            scanner = module.UnifiedScanner()
-            
-            # Run scan
-            findings = scanner.scan(test_file)
-            
-            # Check if vulnerability was detected
-            for finding in findings:
-                if finding['type'] == 'SQLi':
-                    return True
-        except Exception as e:
-            print(f"[!] Self-update test failed: {e}")
-        
-        return False
-
-    def detect_obfuscated_code(self, path):
-        """Detect obfuscated code using entropy analysis"""
-        with open(path, 'r', errors='ignore') as f:
-            content = f.read()
-            entropy = self.calculate_entropy(content)
-            if entropy > ENTROPY_THRESHOLD:
-                self.vulns.append({
-                    'type': 'Obfuscated_Code',
-                    'file': path,
-                    'confidence': 80,
-                    'description': f"High entropy code (possible obfuscation): {entropy:.2f}"
-                })
-
-    def calculate_entropy(self, text):
-        """Calculate Shannon entropy of a text string"""
-        if not text:
-            return 0
-        
-        entropy = 0
-        for x in range(256):
-            p_x = float(text.count(chr(x))) / len(text)
-            if p_x > 0:
-                entropy += -p_x * math.log(p_x, 2)
-                
-        return entropy
-
-    def detect_sensitive_data(self, path):
-        """Detect sensitive data in files"""
-        sensitive_patterns = {
-            "AWS Key": r"AKIA[0-9A-Z]{16}",
-            "Secret Key": r"sk_(live|test)_[0-9a-zA-Z]{24}",
-            "Database Password": r"['\"]db_pass['\"]\s*=>\s*['\"][^'\"]{8,}['\"]",
-            "JWT Secret": r"['\"]jwt_secret['\"]\s*=>\s*['\"][^'\"]{20,}['\"]"
-        }
-        
-        with open(path, 'r', errors='ignore') as f:
-            content = f.read()
-            for name, pattern in sensitive_patterns.items():
-                if re.search(pattern, content):
-                    self.vulns.append({
-                        'type': 'Sensitive_Data',
-                        'file': path,
-                        'confidence': 95,
-                        'description': f"Potential {name} exposure"
-                    })
-
-    def analyze_behavior_profile(self):
-        """Analyze code behavior based on vulnerability findings"""
-        behavior_counts = defaultdict(int)
-        for vuln in self.vulns:
-            behavior_counts[vuln['type']] += 1
-        
-        # Add to profile
-        self.behavior_profile.update(behavior_counts)
-
-    def analyze_trigger_surface(self):
-        """Analyze vulnerability exposure"""
-        exposed_count = sum(1 for vuln in self.vulns if vuln.get('confidence', 0) > 80)
-        self.behavior_profile['exposed_vulnerabilities'] = exposed_count
 
     def generate_vuln_heatmap(self):
         """Generate vulnerability heatmap visualization"""
@@ -671,9 +988,74 @@ class UnifiedScanner:
             shutil.rmtree(self.temp_dir)
             print(f"[*] Cleaned up temporary directory: {self.temp_dir}")
 
+
+
+    def calculate_entropy(self, text):
+        """Calculate Shannon entropy of a text string"""
+        if not text:
+            return 0
+        
+        entropy = 0
+        for x in range(256):
+            p_x = float(text.count(chr(x))) / len(text)
+            if p_x > 0:
+                entropy += -p_x * math.log(p_x, 2)
+                
+        return entropy
+
+    def detect_sensitive_data(self, path):
+        """Detect sensitive data in files"""
+        sensitive_patterns = {
+            "AWS Key": r"AKIA[0-9A-Z]{16}",
+            "Secret Key": r"sk_(live|test)_[0-9a-zA-Z]{24}",
+            "Database Password": r"['\"]db_pass['\"]\s*=>\s*['\"][^'\"]{8,}['\"]",
+            "JWT Secret": r"['\"]jwt_secret['\"]\s*=>\s*['\"][^'\"]{20,}['\"]"
+        }
+        
+        with open(path, 'r', errors='ignore') as f:
+            content = f.read()
+            for name, pattern in sensitive_patterns.items():
+                if re.search(pattern, content):
+                    self.vulns.append({
+                        'type': 'Sensitive_Data',
+                        'file': path,
+                        'confidence': 95,
+                        'description': f"Potential {name} exposure"
+                    })
+
+    def analyze_behavior_profile(self):
+        """Analyze code behavior based on vulnerability findings"""
+        behavior_counts = defaultdict(int)
+        for vuln in self.vulns:
+            behavior_counts[vuln['type']] += 1
+        
+        # Add to profile
+        self.behavior_profile.update(behavior_counts)
+
+    def analyze_trigger_surface(self):
+        """Analyze vulnerability exposure"""
+        exposed_count = sum(1 for vuln in self.vulns if vuln.get('confidence', 0) > 80)
+        self.behavior_profile['exposed_vulnerabilities'] = exposed_count
+
+
+    def detect_obfuscated_code(self,path):
+        """Detect obfuscated code using entropy analysis"""
+        with open(path, 'r', errors='ignore') as f:
+            content = f.read()
+            entropy = self.calculate_entropy(content)
+            if entropy > ENTROPY_THRESHOLD:
+                self.vulns.append({
+                    'type': 'Obfuscated_Code',
+                    'file': path,
+                    'confidence': 80,
+                    'description': f"High entropy code (possible obfuscation): {entropy:.2f}"
+                })
+
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Unified Vulnerability Scanner with AI and Self-Improvement",
+        description="_9orsana Vulnerability SourceCode Scanner with AI Capabilities and Self-Improvement",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument("--cms", choices=['WordPress', 'Joomla'], help="CMS type to scan")
@@ -683,7 +1065,7 @@ def main():
     parser.add_argument("--self-update", action="store_true", help="Enable self-updating capability")
     args = parser.parse_args()
 
-    scanner = UnifiedScanner()
+    scanner = _9orsanaScanner()
     
     # Install and scan CMS plugin
     if args.cms and args.plugin:
