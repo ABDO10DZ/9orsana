@@ -37,7 +37,7 @@
 
 1. **Install Dependencies**:
 ```bash
-# PHP scanning
+# PHP required
 sudo apt-get install php php-ast
 
 # composer setup
@@ -51,8 +51,7 @@ php -r "unlink('composer-setup.php');"
 composer require nikic/php-parser
 
 # Python dependencies
-pip install requests numpy scikit-learn matplotlib networkx
-
+pip install -r requirements.txt
 # WP-CLI
 curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
 chmod +x wp-cli.phar
@@ -63,12 +62,15 @@ wget https://github.com/joomlatools/joomlatools-console/releases/download/v1.6.0
 chmod +x joomla.phar
 sudo mv joomla.phar /usr/local/bin/joomla
 
+#make build (direct pythoning 9orsana also still works
+makepkg -si
+
 # DeepSeek (using Ollama)
 curl https://ollama.ai/install.sh | sh
 ollama run deepseek-coder
 ```
 
-2. **Run the Scanner**:
+2. **run 9orsana**:
 
 **Scan WordPress plugin**:
 ```bash
