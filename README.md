@@ -52,12 +52,12 @@ composer require nikic/php-parser
 
 # Python dependencies
 pip install -r requirements.txt
-# WP-CLI or use official WP-CLI by Wordpress = https://wp-cli.org/
+# WP-CLI
 curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
 chmod +x wp-cli.phar
 sudo mv wp-cli.phar /usr/local/bin/wp
 
-# Joomla CLI or use Official J4-CLI by joomla = https://docs.joomla.org/J4.x:CLI_Update
+# Joomla CLI
 wget https://github.com/joomlatools/joomlatools-console/releases/download/v1.6.0/joomla.phar
 chmod +x joomla.phar
 sudo mv joomla.phar /usr/local/bin/joomla
@@ -156,6 +156,30 @@ python 9orsana.py --path ./myapp --self-update
   ]
 }
 ```
+### 📜 CMS Platforms with CLI Tools Supported
+**soon we add the rest**
+
+| CMS Name                                | Language   | CLI Tool                                        | CLI Location/Install                                  | Key CLI Features                                                                | Present |
+|----------------------------------------|------------|--------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------------|---------|
+| **WordPress**                           | PHP        | `WP-CLI`                                        | [wp-cli.org](https://wp-cli.org) – install separately  | Core/plugin/theme management, user/db control, multisite, updates, cron jobs    | ✅       |
+| **Joomla**                              | PHP        | Built-in (J4+)                                  | Included in `cli/joomla.php`                           | Core/extension updates, user/config handling, maintenance, file cleanup         | ✅       |
+| **Drupal**                              | PHP        | `Drush`                                         | Install via Composer                                   | Core updates, config import/export, cache, DB, cron, user & module management   | ❌       |
+| **Magento (Adobe Commerce)**            | PHP        | `bin/magento`                                   | Comes with Magento install                             | Module/theme enable/disable, cache/index, upgrade, user/admin, DB export/import | ❌       |
+| **Laravel-based CMS (e.g. OctoberCMS)** | PHP        | `artisan`                                       | Comes with Laravel apps                                | Migrations, models, components, plugin install, user/tasks                      | ❌       |
+| **Typo3**                               | PHP        | `typo3` (Console)                               | Included / Composer                                    | Extensions, DB, backend user control, cache, upgrades                           | ❌       |
+| **ConcreteCMS**                         | PHP        | `concrete/bin/concrete`                         | Included                                               | Install, cache clear, user/group mgmt, jobs, packages                           | ❌       |
+| **Grav**                                | PHP        | `bin/gpm`, `bin/grav`                           | Included                                               | Plugin/theme mgmt, backups, cache, system checks                                | ❌       |
+| **Craft CMS**                           | PHP        | `craft`                                         | Included                                               | Project config, DB backups, plugin mgmt, queue/job mgmt                         | ❌       |
+| **Statamic**                            | PHP        | `php please`                                    | Included                                               | Content scaffolding, backups, plugin mgmt, data import                          | ❌       |
+| **SilverStripe**                        | PHP        | `vendor/bin/sake` or `framework/cli-script.php` | Included / Composer                                    | Dev tasks, flush cache, DB rebuild, config                                      | ❌       |
+| **Bolt CMS**                            | PHP        | `bin/console`                                   | Symfony Console                                        | DB schema update, users, cache clear, extensions                                | ❌       |
+| **Plone**                               | Python     | `bin/instance`                                  | Included with buildout                                 | DB packing, migrations, user/permission control, install add-ons                | ❌       |
+| **Ghost**                               | Node.js    | `ghost`                                         | Installed via `ghost-cli`                              | Install/update/start/stop blog instances, themes, users                         | ❌       |
+| **Strapi**                              | Node.js    | `strapi`                                        | Comes with Strapi project                              | Scaffold API, start server, build admin panel, plugin mgmt                      | ❌       |
+| **KeystoneJS**                          | Node.js    | `keystone`                                      | Part of Keystone package                               | Start server, manage data, generate schema, admin tasks                         | ❌       |
+| **Directus**                            | Node.js    | `npx directus`                                  | Via `npm install` or `npx`                             | Start/stop project, DB migration, user roles, collection mgmt                   | ❌       |
+| **Sanity**                              | JavaScript | `sanity`                                        | Via `npm install -g @sanity/cli`                       | Deploy, dataset export/import, auth, schema mgmt                                | ❌       |
+| **Netlify CMS**                         | JavaScript | Git/CLI-driven                                  | Uses Git workflows                                     | Content via Git, CLI indirectly through Git commands                            | ❌       |
 
 ### Visual Outputs:
 
