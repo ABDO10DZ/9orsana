@@ -52,12 +52,12 @@ composer require nikic/php-parser
 
 # Python dependencies
 pip install -r requirements.txt
-# WP-CLI
+# WP-CLI or use official WP-CLI by Wordpress = https://wp-cli.org/
 curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
 chmod +x wp-cli.phar
 sudo mv wp-cli.phar /usr/local/bin/wp
 
-# Joomla CLI
+# Joomla CLI or use Official J4-CLI by joomla = https://docs.joomla.org/J4.x:CLI_Update
 wget https://github.com/joomlatools/joomlatools-console/releases/download/v1.6.0/joomla.phar
 chmod +x joomla.phar
 sudo mv joomla.phar /usr/local/bin/joomla
